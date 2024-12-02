@@ -5,4 +5,5 @@ signup_client: signup_client.cpp
 login_client: login_client.cpp
 	g++ -o login_client login_client.cpp -lssl -lcrypto
 server: server.cpp
-	g++ -o server server.cpp
+	g++ -o server server.cpp -lsqlite3 -pthread
+

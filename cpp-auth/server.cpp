@@ -1,18 +1,48 @@
 #include <iostream>
 #include <string>
-#include <cstring>
 #include <unordered_map>
+#include <map>
+#include <cstring>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <thread>
-#include <mutex>
+#include <sqlite3.h>
 
-// In-memory database and mutex for thread safety
-std::unordered_map<std::string, std::string> userDatabase;
-std::mutex dbMutex; // Ensures thread-safe access to the database
+// Function to initialize the SQLite database
+sqlite3* initializeDatabase() {
+    sqlite3* db;
+    int rc = sqlite3_open("users.db", &db);
 
-void handleClient(int client_sock) {
+    if (rc) {
+        std::cerr << "Error opening SQLite database: " << sqlite3_errmsg(db) << "\n";
+        return nullptr;
+    }
+
+    // Create a table for storing users if it doesn't already exist
+    const char* createTableSQL = R"(
+        CREATE TABLE IF NOT EXISTS Users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL
+        );
+    )";
+
+    char* errMsg = nullptr;
+    rc = sqlite3_exec(db, createTableSQL, nullptr, nullptr, &errMsg);
+
+    if (rc != SQLITE_OK) {
+        std::cerr << "Error creating table: " << errMsg << "\n";
+        sqlite3_free(errMsg);
+        sqlite3_close(db);
+        return nullptr;
+    }
+
+    return db;
+}
+
+// Function to handle client requests
+void handleClient(int client_sock, sqlite3* db, std::unordered_map<std::string, bool>* loginned) {
     char buffer[1024];
     memset(buffer, 0, sizeof(buffer));
 
@@ -45,34 +75,74 @@ void handleClient(int client_sock) {
     std::string password = request.substr(password_pos + 9);
 
     if (action == "signup") {
-        // Lock the database for thread-safe access
-        std::lock_guard<std::mutex> lock(dbMutex);
+        // Insert the username and password into the SQLite database
+        const char* insertSQL = "INSERT INTO Users (username, password) VALUES (?, ?)";
+        sqlite3_stmt* stmt;
+        int rc = sqlite3_prepare_v2(db, insertSQL, -1, &stmt, nullptr);
 
-        // Check if the username already exists
-        if (userDatabase.find(username) != userDatabase.end()) {
-            std::string response = "Error: Username already exists\n";
-            send(client_sock, response.c_str(), response.size(), 0);
-        } else {
-            // Store the username and hashed password
-            userDatabase[username] = password;
+        if (rc != SQLITE_OK) {
+            std::cerr << "Failed to prepare statement: " << sqlite3_errmsg(db) << "\n";
+            close(client_sock);
+            return;
+        }
+
+        sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt, 2, password.c_str(), -1, SQLITE_STATIC);
+
+        rc = sqlite3_step(stmt);
+        if (rc == SQLITE_DONE) {
             std::string response = "Signup successful\n";
             send(client_sock, response.c_str(), response.size(), 0);
             std::cout << "User signed up: " << username << "\n";
-        }
-    } else if (action == "login") {
-        // Lock the database for thread-safe access
-        std::lock_guard<std::mutex> lock(dbMutex);
-
-        // Validate the username and password
-        auto it = userDatabase.find(username);
-        if (it != userDatabase.end() && it->second == password) {
-            std::string response = "Login successful\n";
+        } else {
+            std::string response = "Error: Username already exists\n";
             send(client_sock, response.c_str(), response.size(), 0);
-            std::cout << "User logged in: " << username << "\n";
+        }
+
+        sqlite3_finalize(stmt);
+    } else if (action == "login") {
+        // Check the username and password in the SQLite database
+        const char* querySQL = "SELECT password FROM Users WHERE username = ?";
+        sqlite3_stmt* stmt;
+        int rc = sqlite3_prepare_v2(db, querySQL, -1, &stmt, nullptr);
+
+        if (rc != SQLITE_OK) {
+            std::cerr << "Failed to prepare statement: " << sqlite3_errmsg(db) << "\n";
+            close(client_sock);
+            return;
+        }
+
+        sqlite3_bind_text(stmt, 1, username.c_str(), -1, SQLITE_STATIC);
+
+        rc = sqlite3_step(stmt);
+        if (rc == SQLITE_ROW) {
+            const char* storedPassword = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            if (password == storedPassword) {
+                std::string response = "Login successful\n";
+                if (loginned->find(username) != loginned->end()) {
+                    response = "You are already logged in on another device";
+                    std::cout << "User login error: second device ; username = " << username << "\n";
+                } else {
+                    std::cout << "User logged in: " << username << "\n";
+                    loginned->insert({username, true});
+                }
+                send(client_sock, response.c_str(), response.size(), 0);
+                
+            } else {
+                std::string response = "Error: Invalid username or password\n";
+                send(client_sock, response.c_str(), response.size(), 0);
+            }
         } else {
             std::string response = "Error: Invalid username or password\n";
             send(client_sock, response.c_str(), response.size(), 0);
         }
+
+        sqlite3_finalize(stmt);
+    } else if (action == "logout") {
+        loginned->erase(username);
+        std::cout << "User logged out ; username = " << username << "\n";
+        std::string response = "Logout successful\n";
+        send(client_sock, response.c_str(), response.size(), 0);
     } else {
         std::string error_response = "Unknown action\n";
         send(client_sock, error_response.c_str(), error_response.size(), 0);
@@ -82,15 +152,14 @@ void handleClient(int client_sock) {
     close(client_sock);
 }
 
-void startServer(const std::string& server_ip, int server_port) {
-    // Step 1: Create the socket
+void startServer(const std::string& server_ip, int server_port, sqlite3* db) {
+    std::unordered_map<std::string, bool> loginned;
     int server_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (server_sock == -1) {
         std::cerr << "Failed to create server socket\n";
         return;
     }
 
-    // Step 2: Bind the socket to the IP and port
     sockaddr_in server_address{};
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(server_port);
@@ -102,7 +171,6 @@ void startServer(const std::string& server_ip, int server_port) {
         return;
     }
 
-    // Step 3: Listen for incoming connections
     if (listen(server_sock, 5) < 0) {
         std::cerr << "Listening failed\n";
         close(server_sock);
@@ -111,7 +179,6 @@ void startServer(const std::string& server_ip, int server_port) {
 
     std::cout << "Server is listening on " << server_ip << ":" << server_port << "\n";
 
-    // Step 4: Accept and handle client connections
     while (true) {
         sockaddr_in client_address{};
         socklen_t client_len = sizeof(client_address);
@@ -122,21 +189,24 @@ void startServer(const std::string& server_ip, int server_port) {
         }
 
         std::cout << "Client connected\n";
-
-        // Launch a new thread to handle the client
-        std::thread clientThread(handleClient, client_sock);
-        clientThread.detach(); // Detach the thread to allow independent execution
+        std::thread clientThread(handleClient, client_sock, db, &loginned);
+        clientThread.detach();
     }
 
-    // Step 5: Close the server socket (unreachable in this example)
     close(server_sock);
-    std::cout << "Server shut down\n";
 }
+
 int main() {
     std::string server_ip = "127.0.0.1";
     int server_port = 8080;
 
-    startServer(server_ip, server_port);
+    sqlite3* db = initializeDatabase();
+    if (!db) {
+        return -1;
+    }
 
+    startServer(server_ip, server_port, db);
+
+    sqlite3_close(db);
     return 0;
 }
