@@ -1,12 +1,12 @@
 #! the retval depends upon the answer to the following question:
         # Are we making a new TCP connection on client side for each of these requests or are we reusing the same old socket used to send the first query from the client to the server?
-
+#!! why no error handling?!
 import socket
 import sqlite3
 import threading
 import re
 
-def handle_signup_req(req, client_sock, db):
+def handle_signup_req(req, client_sock, client_addr, db):
     pos = req.find('username=') + 9
     username = req[pos : req.find('&', pos)]
 
@@ -25,7 +25,7 @@ def handle_signup_req(req, client_sock, db):
     
     return False #!
 
-def handle_login_req(req, client_sock, db):
+def handle_login_req(req, client_sock, client_addr, db):
     pos = req.find('username=') + 9
     username = req[pos : req.find('&', pos)]
 
@@ -47,7 +47,7 @@ def handle_login_req(req, client_sock, db):
             print(f"User login error: second device ; username = {username}")
         else:
             # Add user to LoggedInUsers table to mark as logged in
-            cursor.execute("INSERT INTO LoggedInUsers (username) VALUES (?)", (username,))
+            cursor.execute("INSERT INTO LoggedInUsers (username) VALUES (?)", (username,))#!!
             db.commit()
             print(f"User logged in: {username}")
     else:
@@ -57,14 +57,14 @@ def handle_login_req(req, client_sock, db):
     return False  #!
 
 
-def handle_logout_req(req, client_sock, db):
+def handle_logout_req(req, client_sock, client_addr, db):
     pos = req.find('username=') + 9
     username = req[pos : req.find('&', pos)]
 
     cursor = db.cursor()
 
     # Remove the user from the LoggedInUsers table if they are logged in
-    cursor.execute("DELETE FROM LoggedInUsers WHERE username = ?", (username,))
+    cursor.execute("DELETE FROM LoggedInUsers WHERE username = ?", (username,))#!!
     db.commit()
 
     if cursor.rowcount > 0:
@@ -76,12 +76,45 @@ def handle_logout_req(req, client_sock, db):
     client_sock.send(response.encode('utf-8'))
     return False  #!
 
+def handle_create_meeting_req(req, client_sock, client_addr, db):
+    pos = req.find('usename=') + 9
+    username = req[pos:]
+
+    cursor = db.cursor()
+
+    cursor.execute("INSERT INTO Meetings (username) VALUES (?)", (username,))#!!
+    db.commit()
+    
+    response = "meeting creation successfull\n"
+    client_sock.send(response.encode('utf-8'))
+    return False #!
+
+def handle_join_meeting_req(req, client_sock, client_addr, db):
+    # pos = req.find('username=') + 9
+    # username = req[pos : req.find('&', pos)]
+
+    # pos = req.find('mid=') + 4
+    # mid = int(req[pos:])
+
+    # cursor = db.cursor()
+
+    # cursor.execute("SELECT * FROM Meetings WHERE mid = (?)", (mid,)) #!!
+    # if cursor.fetchone():
+    #     cursor.execute("SELECT * FROM Participants WHERE mid = (?)", (mid,)) #!!
+    #     participants = cursor.fetchall()
+    #     #tell all participants about the new one
+    #     #tell new one about all others
+    #     #save new one in database
+
+
+    return False
+
 req_patterns = {
     re.compile(r'^action=signup&username=\w+&password=.+$') : handle_signup_req,
     re.compile(r'^action=login&username=\w+&password=.+$') : handle_login_req,
     re.compile(r'^action=logout&username=\w+$') : handle_logout_req,
-  #  re.compile(r'^$') : handle_create_meeting_req,
-   # re.compile(r'^$') : handle_join_meeting_req
+    re.compile(r'^action=create_meeting&username=\w+$') : handle_create_meeting_req,
+    re.compile(r'^action=join_meeting&username=\w+&mid=\d+$') : handle_join_meeting_req
 }
 
 def initialize_database():
@@ -146,7 +179,7 @@ def handle_client(client_sock, client_addr):
 
         for regex, func in req_patterns.items():
             if regex.match(request):
-                loop_flag = func(request, client_sock, db)
+                loop_flag = func(request, client_sock, client_addr, db)
                 nomatch = False
                 break
         
