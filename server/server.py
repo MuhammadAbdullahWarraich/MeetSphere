@@ -84,14 +84,14 @@ def handle_login_req(req, client_sock, client_addr, db):
 
 def handle_logout_req(req, client_sock, client_addr, db):
     pos = req.find('username=') + 9
-    username = req[pos : req.find('&', pos)]
+    username = req[pos:]
 
     cursor = db.cursor()
 
     # Remove the user from the LoggedInUsers table if they are logged in
-    cursor.execute("DELETE FROM LoggedInUsers WHERE username = ?", (username,))#!!
+    cursor.execute("DELETE FROM LoggedInUsers WHERE username = (?)", (username,))#!!
     db.commit()
-
+    
     if cursor.rowcount > 0:
         print(f"User logged out ; username = {username}")
         response = "res&outcome=success"
