@@ -2,7 +2,7 @@
 #! the retval depends upon the answer to the following question:
         # Are we making a new TCP connection on client side for each of these requests or are we reusing the same old socket used to send the first query from the client to the server?
 #!! why no error handling?!
-
+#!!! Is client_socket.close() in specific query handlers undermining the loop of the generic handle_client or not?
 # ---------------------------------------------------------docs ? ! 
 '''
     ||CLIENT TO SERVER||
@@ -154,7 +154,29 @@ def handle_join_meeting_req(req, client_sock, client_addr, db):
     else:
         failure = "res&outcome=error&msg=meeting doesn't exist"
         client_sock.send(failure.encode('utf-8'))
-        client_sock.close()
+        client_sock.close() #!!!
+    return False #!
+
+def handle_leave_meeting_req(req, client_sock, client_addr, db):
+    pos = req.find('username=') + 9
+    username = req[pos : req.find('&', pos)]
+
+    pos = req.find('mid=') + 4
+    mid = int(req[pos:])
+
+    cursor = db.cursor()
+    cursor.execute("SELECT * FROM Meetings WHERE mid = (?)", (mid,))
+    if cursor.fetchone():
+        cursor.execute("DELETE FROM Participants WHERE mid = (?) AND username = (?)", (mid, username)) #!!
+        cursor.commit()
+        res = "res&outcome=success"
+        client_sock.send(res.encode('utf-8'))
+        client_sock.close() #!!!
+    else:
+        res = "res&outcome=error&msg=invalid mid"
+        client_sock.send(res.encode('utf-8'))
+        client_socket.close()
+
     return False #!
 
 req_patterns = {
@@ -162,7 +184,8 @@ req_patterns = {
     re.compile(r'^action=login&username=\w+&password=.+$') : handle_login_req,
     re.compile(r'^action=logout&username=\w+$') : handle_logout_req,
     re.compile(r'^action=create_meeting&username=\w+$') : handle_create_meeting_req,
-    re.compile(r'^action=join_meeting&username=\w+&mid=\d+$') : handle_join_meeting_req
+    re.compile(r'^action=join_meeting&username=\w+&mid=\d+$') : handle_join_meeting_req,
+    re.compile(r'^action=leave_meeting&username=\w+&mid=\d+$') : handle_leave_meeting_req
 }
 
 def initialize_database():
