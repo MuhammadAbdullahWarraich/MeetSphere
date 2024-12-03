@@ -5,6 +5,7 @@ import socket
 import sqlite3
 import threading
 import re
+import json
 
 def handle_signup_req(req, client_sock, client_addr, db):
     pos = req.find('username=') + 9
@@ -90,24 +91,50 @@ def handle_create_meeting_req(req, client_sock, client_addr, db):
     return False #!
 
 def handle_join_meeting_req(req, client_sock, client_addr, db):
-    # pos = req.find('username=') + 9
-    # username = req[pos : req.find('&', pos)]
+    pos = req.find('username=') + 9
+    username = req[pos : req.find('&', pos)]
 
-    # pos = req.find('mid=') + 4
-    # mid = int(req[pos:])
+    pos = req.find('mid=') + 4
+    mid = int(req[pos:])
 
-    # cursor = db.cursor()
+    cursor = db.cursor()
 
-    # cursor.execute("SELECT * FROM Meetings WHERE mid = (?)", (mid,)) #!!
-    # if cursor.fetchone():
-    #     cursor.execute("SELECT * FROM Participants WHERE mid = (?)", (mid,)) #!!
-    #     participants = cursor.fetchall()
-    #     #tell all participants about the new one
-    #     #tell new one about all others
-    #     #save new one in database
+    cursor.execute("SELECT * FROM Meetings WHERE mid = (?)", (mid,)) #!!
+    if cursor.fetchone():
+        cursor.execute("SELECT * FROM Participants WHERE mid = (?)", (mid,)) #!!
+        participants = cursor.fetchall()
+        
+        #tell all participants about the new one
+        msg = json.dumps([list(row) for row in participants])
+        # mid username   ip   port
+        # 0   1          2    3
+        for p in participants:
+            try:
+                p_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                p_sock.connect((p[1], int(p[2])))
+            except socket.error as err:
+                print(f"Error while creating or connecting p_socket: {err}")
+                res = "failed to join meeting"
+                client_sock.send(res.encode('utf-8'))
+                client_sock.close()
+                return False #!
+            
+            p_sock.send(msg.encode('utf-8'))
+            p_sock.close()
 
-
-    return False
+        #tell new one about all others
+        client_sock.send(msg)
+        success = "enter meeting successful"
+        client_sock.send(success.encode('utf-8'))
+        client_sock.close()
+        #save new one in database
+        cursor.execute("INSERT INTO Participants (mid, username, userIp, userPort) VALUES (?)", (mid, username, client_addr[0], client_addr[1])) #!!
+        db.commit()
+    else:
+        failure = "meeting doesn't exist"
+        client_sock.send(failure.encode('utf-8'))
+        client_sock.close()
+    return False #!
 
 req_patterns = {
     re.compile(r'^action=signup&username=\w+&password=.+$') : handle_signup_req,
