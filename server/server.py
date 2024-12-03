@@ -1,6 +1,27 @@
+#----------------------------------------------------------some things to consider
 #! the retval depends upon the answer to the following question:
         # Are we making a new TCP connection on client side for each of these requests or are we reusing the same old socket used to send the first query from the client to the server?
 #!! why no error handling?!
+
+# ---------------------------------------------------------docs ? ! 
+'''
+    ||CLIENT TO SERVER||
+
+action=____&parameter1=_______&parameter2=_______&parameter3=___________
+
+    ||SERVER TO CLIENT||
+
+req&action=________&parameter2=________&parameter2=_____________
+ 
+        ||OR||
+
+res&outcome=___________&parameter1=__________&parameter2=_________________
+
+                ^^
+                success/error
+
+'''
+# ---------------------------------------------------------------------------------------------------------------------------------
 import socket
 import sqlite3
 import threading
@@ -18,10 +39,10 @@ def handle_signup_req(req, client_sock, client_addr, db):
     try:
         cursor.execute("INSERT INTO Users (username, password) VALUES (?, ?)", (username, password))
         db.commit()
-        response = "Signup successful\n"
+        response = "res&outcome=success"
         print(f"User signed up: {username}")
     except sqlite3.IntegrityError:
-        response = "Error: Username already exists\n"
+        response = "res&outcome=error&msg=User already exists"
     client_sock.send(response.encode('utf-8'))
     
     return False #!
@@ -39,12 +60,12 @@ def handle_login_req(req, client_sock, client_addr, db):
     row = cursor.fetchone()
     
     if row and row[0] == password:
-        response = "Login successful\n"
+        response = "res&outcome=success"
         
         # Check if user is already logged in by checking LoggedInUsers table
         cursor.execute("SELECT 1 FROM LoggedInUsers WHERE username = ?", (username,))
         if cursor.fetchone():
-            response = "You are already logged in on another device"
+            response = "res&outcome=error&msg=You are already logged in on another device"
             print(f"User login error: second device ; username = {username}")
         else:
             # Add user to LoggedInUsers table to mark as logged in
@@ -52,7 +73,7 @@ def handle_login_req(req, client_sock, client_addr, db):
             db.commit()
             print(f"User logged in: {username}")
     else:
-        response = "Error: Invalid username or password\n"
+        response = "res&outcome=error&msg=Error: Invalid username or password, try again"
     
     client_sock.send(response.encode('utf-8'))
     return False  #!
@@ -70,9 +91,9 @@ def handle_logout_req(req, client_sock, client_addr, db):
 
     if cursor.rowcount > 0:
         print(f"User logged out ; username = {username}")
-        response = "Logout successful\n"
+        response = "res&outcome=success"
     else:
-        response = "Error: User not logged in\n"
+        response = "res&outcome=error&msg=User not logged in"
     
     client_sock.send(response.encode('utf-8'))
     return False  #!
@@ -86,7 +107,7 @@ def handle_create_meeting_req(req, client_sock, client_addr, db):
     cursor.execute("INSERT INTO Meetings (username) VALUES (?)", (username,))#!!
     db.commit()
     
-    response = "meeting creation successfull\n"
+    response = "res&outcome=success"
     client_sock.send(response.encode('utf-8'))
     return False #!
 
@@ -105,7 +126,7 @@ def handle_join_meeting_req(req, client_sock, client_addr, db):
         participants = cursor.fetchall()
         
         #tell all participants about the new one
-        msg = json.dumps([list(row) for row in participants])
+        msg = "req&action=participant_data&data=" + json.dumps([list(row) for row in participants])
         # mid username   ip   port
         # 0   1          2    3
         for p in participants:
@@ -114,7 +135,7 @@ def handle_join_meeting_req(req, client_sock, client_addr, db):
                 p_sock.connect((p[1], int(p[2])))
             except socket.error as err:
                 print(f"Error while creating or connecting p_socket: {err}")
-                res = "failed to join meeting"
+                res = "res&outcome=error&msg=failed to join meeting"
                 client_sock.send(res.encode('utf-8'))
                 client_sock.close()
                 return False #!
@@ -124,14 +145,14 @@ def handle_join_meeting_req(req, client_sock, client_addr, db):
 
         #tell new one about all others
         client_sock.send(msg)
-        success = "enter meeting successful"
+        success = "res&outcome=success"
         client_sock.send(success.encode('utf-8'))
         client_sock.close()
         #save new one in database
         cursor.execute("INSERT INTO Participants (mid, username, userIp, userPort) VALUES (?)", (mid, username, client_addr[0], client_addr[1])) #!!
         db.commit()
     else:
-        failure = "meeting doesn't exist"
+        failure = "res&outcome=error&msg=meeting doesn't exist"
         client_sock.send(failure.encode('utf-8'))
         client_sock.close()
     return False #!
@@ -211,7 +232,7 @@ def handle_client(client_sock, client_addr):
                 break
         
         if nomatch == True:
-            error_response = "Invalid request format\n"
+            error_response = "res&outcome=error&msg=Invalid request format"
             client_sock.send(error_response.encode('utf-8'))
             client_sock.close()
             return
