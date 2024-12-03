@@ -3,6 +3,7 @@
         # Are we making a new TCP connection on client side for each of these requests or are we reusing the same old socket used to send the first query from the client to the server?
 #!! why no error handling?!
 #!!! Is client_socket.close() in specific query handlers undermining the loop of the generic handle_client or not?
+## on line 140, if we want to abort the process of joining the meeting, then we should also remove the name from the local data of those people to whom we have already sent participant row
 # ---------------------------------------------------------docs ? ! 
 '''
     ||CLIENT TO SERVER||
@@ -135,17 +136,19 @@ def handle_join_meeting_req(req, client_sock, client_addr, db):
             try:
                 p_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 p_sock.connect((p[1], int(p[2])))
+                msg = "req&action=new_participant_data&data=" + json.dumps( [ (mid, username, client_addr[0], client_addr[1]) ] )
+                p_sock.send(msg.encode('utf-8'))
+                p_sock.close()
+
             except socket.error as err:
                 print(f"Error while creating or connecting p_socket: {err}")
                 res = "res&outcome=error&msg=failed to join meeting"
                 client_sock.send(res.encode('utf-8'))
-                client_sock.close()
                 return False #!
             
-            p_sock.send(msg.encode('utf-8'))
-            p_sock.close()
-
         #tell new one about all others
+        msg = "req&action=participants_data&data=" + json.dumps([list(row) for row in participants])
+
         client_sock.send(msg)
         success = "res&outcome=success"
         client_sock.send(success.encode('utf-8'))
@@ -156,7 +159,6 @@ def handle_join_meeting_req(req, client_sock, client_addr, db):
     else:
         failure = "res&outcome=error&msg=meeting doesn't exist"
         client_sock.send(failure.encode('utf-8'))
-        client_sock.close() #!!!
     return False #!
 
 def handle_leave_meeting_req(req, client_sock, client_addr, db):
@@ -173,11 +175,10 @@ def handle_leave_meeting_req(req, client_sock, client_addr, db):
         cursor.commit()
         res = "res&outcome=success"
         client_sock.send(res.encode('utf-8'))
-        client_sock.close() #!!!
+        return False
     else:
         res = "res&outcome=error&msg=invalid mid"
         client_sock.send(res.encode('utf-8'))
-        client_socket.close()
 
     return False #!
 
