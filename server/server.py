@@ -129,7 +129,8 @@ def initialize_database():
         print(f"Error opening SQLite database: {e}")
         return None
 
-def handle_client(client_sock, db):
+def handle_client(client_sock, client_addr):
+    db = sqlite3.connect("meetsphere_database.db")
     loop_flag = True
     while loop_flag:
 
@@ -158,7 +159,7 @@ def handle_client(client_sock, db):
     client_sock.close()
 
 
-def start_server(server_ip, server_port, db):
+def start_server(server_ip, server_port):
 
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -171,7 +172,7 @@ def start_server(server_ip, server_port, db):
     while True:
         client_sock, client_addr = server_sock.accept()
         print(f"Client connected: {client_addr}")
-        client_thread = threading.Thread(target=handle_client, args=(client_sock, db))
+        client_thread = threading.Thread(target=handle_client, args=(client_sock, client_addr))
         client_thread.start()
 
 
@@ -181,4 +182,4 @@ if __name__ == "__main__":
 
     db = initialize_database()
     if db:
-        start_server(server_ip, server_port, db)
+        start_server(server_ip, server_port)
